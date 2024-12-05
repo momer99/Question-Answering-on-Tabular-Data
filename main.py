@@ -1,54 +1,98 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from io import StringIO
+from transformers import TapasTokenizer, TapasForQuestionAnswering
 import pandas as pd
-from sklearn.preprocessing import LabelEncoder
+import torch
 
 app = FastAPI()
 
-# Enable CORS for all origins
+# Enable CORS for frontend integration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust to specify trusted origins
+    allow_origins=["*"],  # Adjust this in production
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-class DatasetDescription(BaseModel):
-    columns: list
-    shape: tuple
-    description: str
+# Load the fine-tuned TAPAS model (replace with your model if fine-tuned)
+tokenizer = TapasTokenizer.from_pretrained('google/tapas-base-finetuned-wtq')
+model = TapasForQuestionAnswering.from_pretrained('google/tapas-base-finetuned-wtq')
 
-# Helper function to process CSV file and generate a description
-def process_csv(file_content: str):
-    try:
-        # Read the file into a pandas DataFrame
-        df = pd.read_csv(StringIO(file_content))
-    except Exception as e:
-        raise ValueError(f"Error processing CSV: {e}")
+# Preload datasets
+# Replace these paths with the actual paths to your datasets
+datasets = {
+    "sales_data": pd.read_csv("datasets/sales_data.csv"),
+    "inventory_data": pd.read_csv("datasets/inventory_data.csv"),
+    # Add more datasets as needed
+}
 
-    # Data preprocessing (basic)
-    for column in df.select_dtypes(include=['object']).columns:
-        encoder = LabelEncoder()
-        df[column] = encoder.fit_transform(df[column])
+# Endpoint to list available datasets
+@app.get("/datasets/")
+async def get_datasets():
+    return {"datasets": list(datasets.keys())}
 
-    description = f"Dataset contains {df.shape[0]} rows and {df.shape[1]} columns.\n"
-    description += f"Columns: {', '.join(df.columns)}.\n"
-    description += "First few rows of the dataset:\n"
-    description += df.head().to_string()
+# Endpoint to process question and return an answer
+@app.post("/ask/")
+async def answer_question(dataset_name: str, question: str):
+    if dataset_name not in datasets:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
 
-    return df, description
+    table = datasets[dataset_name]
 
-# Endpoint to accept CSV file upload
-@app.post("/upload/")
-async def upload_file(file: UploadFile = File(...)):
-    content = await file.read()
-    print(f"File content received: {content[:200]}...")  # Debug: Print the first 200 characters of the file
+    # Preprocess the table (e.g., fill missing values)
+    table = table.fillna(value="Unknown")
 
-    df, description = process_csv(content.decode("utf-8"))
-    return DatasetDescription(columns=df.columns.tolist(), shape=df.shape, description=description)
+    # Prepare inputs for the model
+    inputs = tokenizer(
+        table=table,
+        queries=question,
+        padding='max_length',
+        truncation=True,
+        return_tensors="pt"
+    )
+
+    # Get model outputs
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    # Get the predicted answer coordinates
+    predicted_answer_coordinates, predicted_aggregation_indices = tokenizer.convert_logits_to_predictions(
+        inputs,
+        outputs.logits,
+        outputs.logits_aggregation
+    )
+
+    # Extract the answers from the table
+    answers = []
+    for coordinates in predicted_answer_coordinates:
+        cell_values = []
+        for coord in coordinates:
+            cell_value = table.iat[coord]
+            cell_values.append(str(cell_value))
+        answers.append(", ".join(cell_values))
+
+    # Handle aggregation (if any)
+    aggregation_ops = ['NONE', 'SUM', 'AVERAGE', 'COUNT']
+    agg_op_idx = predicted_aggregation_indices[0]
+    agg_op = aggregation_ops[agg_op_idx]
+
+    if agg_op == 'NONE':
+        answer = ", ".join(answers)
+    elif agg_op == 'SUM':
+        # Sum numerical answers
+        answer = str(sum(float(a) for a in answers if a.replace('.', '', 1).isdigit()))
+    elif agg_op == 'AVERAGE':
+        # Average numerical answers
+        nums = [float(a) for a in answers if a.replace('.', '', 1).isdigit()]
+        answer = str(sum(nums) / len(nums)) if nums else "0"
+    elif agg_op == 'COUNT':
+        # Count the number of answers
+        answer = str(len(answers))
+    else:
+        answer = ", ".join(answers)
+
+    return {"question": question, "answer": answer}
 
 if __name__ == "__main__":
     import uvicorn

@@ -1,102 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Upload CSV</title>
-    <style>
-        /* General styles */
-        body {
-            font-family: 'Arial', sans-serif;
-            background-color: #121212;
-            color: white;
-            margin: 0;
-            padding: 0;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            text-align: center;
-        }
-
-        /* Title header */
-        h1 {
-            font-size: 2.5em;
-            color: #f1f1f1;
-            margin-top: 30px;
-            margin-bottom: 30px;
-        }
-
-        /* Form and button styling */
-        #upload-form {
-            display: flex;
-            align-items: center;
-            margin-top: 20px;
-        }
-
-        #file-upload {
-            background-color: #333;
-            border: 1px solid #555;
-            padding: 10px;
-            color: white;
-            font-size: 1em;
-            border-radius: 5px;
-            cursor: pointer;
-            margin-right: 10px;
-            width: 200px;
-        }
-
-        button {
-            background-color: #007BFF;
-            border: none;
-            padding: 10px 20px;
-            color: white;
-            font-size: 1.2em;
-            border-radius: 5px;
-            cursor: pointer;
-            transition: background-color 0.3s ease;
-            width: 200px;
-        }
-
-        button:hover {
-            background-color: #0056b3;
-        }
-
-        /* Description display */
-        pre {
-            background-color: #333;
-            color: #f1f1f1;
-            padding: 15px;
-            border-radius: 5px;
-            width: 80%;
-            margin-top: 30px;
-            text-align: center;
-            word-wrap: break-word;
-            height: 200px;
-            overflow-y: auto;
-            margin-bottom: 30px;
-        }
-
-        /* Responsiveness */
-        @media screen and (max-width: 768px) {
-            h1 {
-                font-size: 1.8em;
-            }
-
-            button {
-                font-size: 1em;
-                padding: 8px 16px;
-                width: 180px;
-            }
-
-            #file-upload {
-                font-size: 1em;
-                padding: 8px;
-                width: 180px;
-            }
-        }
-    </style>
+    <!-- (Same head content as before) -->
 </head>
 <body>
     <h1>Talk to Your Dataset</h1>
@@ -108,12 +13,25 @@
     <h2>Dataset Description</h2>
     <pre id="description"></pre>
 
+    <!-- Add question input -->
+    <h2>Ask a Question</h2>
+    <form id="question-form">
+        <input type="text" id="question-input" placeholder="Enter your question" style="width: 400px; padding: 10px;"/>
+        <button type="submit">Ask</button>
+    </form>
+    <h2>Answer</h2>
+    <pre id="answer"></pre>
+
     <script>
-        const form = document.getElementById('upload-form');
+        const uploadForm = document.getElementById('upload-form');
         const fileInput = document.getElementById('file-upload');
         const description = document.getElementById('description');
 
-        form.addEventListener('submit', async (event) => {
+        const questionForm = document.getElementById('question-form');
+        const questionInput = document.getElementById('question-input');
+        const answerDisplay = document.getElementById('answer');
+
+        uploadForm.addEventListener('submit', async (event) => {
             event.preventDefault();
             const file = fileInput.files[0];
             if (!file) {
@@ -135,6 +53,34 @@
                     `Description:\n${result.description}`;
             } catch (error) {
                 description.textContent = "Error uploading file.";
+            }
+        });
+
+        questionForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const question = questionInput.value.trim();
+            if (!question) {
+                alert("Please enter a question.");
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append("question", question);
+
+            try {
+                const response = await fetch('http://localhost:8000/ask/', {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                const result = await response.json();
+                if (result.error) {
+                    answerDisplay.textContent = result.error;
+                } else {
+                    answerDisplay.textContent = `Q: ${result.question}\nA: ${result.answer}`;
+                }
+            } catch (error) {
+                answerDisplay.textContent = "Error processing question.";
             }
         });
     </script>
