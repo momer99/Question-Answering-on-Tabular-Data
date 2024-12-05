@@ -1,8 +1,11 @@
+# main.py
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from transformers import TapasTokenizer, TapasForQuestionAnswering
 import pandas as pd
 import torch
+from datasets import load_dataset
+import os
 
 app = FastAPI()
 
@@ -15,22 +18,49 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load the fine-tuned TAPAS model (replace with your model if fine-tuned)
+# Load the pre-trained TAPAS model (we'll fine-tune it later)
 tokenizer = TapasTokenizer.from_pretrained('google/tapas-base-finetuned-wtq')
 model = TapasForQuestionAnswering.from_pretrained('google/tapas-base-finetuned-wtq')
 
-# Preload datasets
-# Replace these paths with the actual paths to your datasets
-datasets = {
-    "sales_data": pd.read_csv("datasets/sales_data.csv"),
-    "inventory_data": pd.read_csv("datasets/inventory_data.csv"),
-    # Add more datasets as needed
-}
+# Load the DataBench QA dataset
+print("Loading DataBench QA dataset...")
+databench_qa = load_dataset("cardiffnlp/databench", "qa")
+print("DataBench QA dataset loaded.")
+
+# Extract the list of dataset names from the QA dataset
+dataset_names = set(databench_qa['train']['dataset'])
+print(f"Datasets found in DataBench QA: {dataset_names}")
+
+# Function to load the actual datasets
+def load_databench_datasets(dataset_names):
+    datasets = {}
+    data_dir = "databench_datasets"  # Directory where datasets are stored
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir)
+        print(f"Created directory {data_dir}. Please place your datasets here.")
+
+    for name in dataset_names:
+        dataset_path = os.path.join(data_dir, f"{name}.csv")
+        if os.path.isfile(dataset_path):
+            print(f"Loading dataset: {name}")
+            try:
+                datasets[name] = pd.read_csv(dataset_path)
+            except Exception as e:
+                print(f"Error loading dataset {name}: {e}")
+        else:
+            print(f"Dataset file {dataset_path} not found.")
+            datasets[name] = pd.DataFrame()  # Empty DataFrame as placeholder
+
+    return datasets
+
+# Load the datasets into a dictionary
+datasets = load_databench_datasets(dataset_names)
 
 # Endpoint to list available datasets
 @app.get("/datasets/")
 async def get_datasets():
-    return {"datasets": list(datasets.keys())}
+    available_datasets = [name for name in datasets.keys() if not datasets[name].empty]
+    return {"datasets": available_datasets}
 
 # Endpoint to process question and return an answer
 @app.post("/ask/")
@@ -39,6 +69,9 @@ async def answer_question(dataset_name: str, question: str):
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
     table = datasets[dataset_name]
+
+    if table.empty:
+        return {"question": question, "answer": "Dataset is not available or empty."}
 
     # Preprocess the table (e.g., fill missing values)
     table = table.fillna(value="Unknown")
@@ -81,7 +114,8 @@ async def answer_question(dataset_name: str, question: str):
         answer = ", ".join(answers)
     elif agg_op == 'SUM':
         # Sum numerical answers
-        answer = str(sum(float(a) for a in answers if a.replace('.', '', 1).isdigit()))
+        nums = [float(a) for a in answers if a.replace('.', '', 1).isdigit()]
+        answer = str(sum(nums)) if nums else "0"
     elif agg_op == 'AVERAGE':
         # Average numerical answers
         nums = [float(a) for a in answers if a.replace('.', '', 1).isdigit()]
